@@ -11,8 +11,11 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 public class MessageService {
@@ -37,38 +40,42 @@ public class MessageService {
 
         Message saved = messageRepository.save(message);
         rabbitTemplate.convertAndSend(RabbitMQConfig.QUEUE_NAME, saved.getId().toString());
-        return toResponse(saved);
+        return toResponses(List.of(saved)).getFirst();
     }
 
     public List<MessageResponse> findAll() {
-        return messageRepository.findAll()
-                .stream()
-                .map(this::toResponse)
-                .toList();
+        return toResponses(messageRepository.findAll());
     }
 
     public List<MessageResponse> findBySenderId(String senderId) {
-        return messageRepository.findBySenderId(senderId)
-                .stream()
-                .map(this::toResponse)
-                .toList();
+        return toResponses(messageRepository.findBySenderId(senderId));
     }
 
     public Optional<MessageResponse> findById(UUID id) {
-        return messageRepository.findById(id).map(this::toResponse);
+        return messageRepository.findById(id)
+                .map(message -> toResponses(List.of(message)).getFirst());
     }
 
-    private MessageResponse toResponse(Message message) {
-        String username = userGrpcClient.getUserByUsername(message.getSenderUsername())
-                .map(UserResponse::getUsername)
-                .orElse(message.getSenderUsername());
+    private List<MessageResponse> toResponses(List<Message> messages) {
+        if (messages.isEmpty()) {
+            return List.of();
+        }
 
-        return new MessageResponse(
-                message.getId(),
-                message.getContent(),
-                message.getSenderId(),
-                username,
-                message.getCreatedAt()
-        );
+        Set<String> senderUsernames = messages.stream()
+                .map(Message::getSenderUsername)
+                .collect(Collectors.toSet());
+        Map<String, UserResponse> resolvedUsers = userGrpcClient.getUsersByUsernames(senderUsernames);
+
+        return messages.stream()
+                .map(message -> new MessageResponse(
+                        message.getId(),
+                        message.getContent(),
+                        message.getSenderId(),
+                        resolvedUsers.containsKey(message.getSenderUsername())
+                                ? resolvedUsers.get(message.getSenderUsername()).getUsername()
+                                : message.getSenderUsername(),
+                        message.getCreatedAt()
+                ))
+                .toList();
     }
 }

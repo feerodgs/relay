@@ -8,14 +8,23 @@ option java_multiple_files = true;
 
 service UserGrpcService {
   rpc GetUserByUsername (GetUserByUsernameRequest) returns (UserResponse);
+  rpc GetUsersByUsernames (GetUsersByUsernamesRequest) returns (UsersResponse);
 }
 
 message GetUserByUsernameRequest {
   string username = 1;
 }
 
+message GetUsersByUsernamesRequest {
+  repeated string usernames = 1;
+}
+
 message UserResponse {
   string id = 1;
   string username = 2;
   string email = 3;
+}
+
+message UsersResponse {
+  repeated UserResponse users = 1;
 }

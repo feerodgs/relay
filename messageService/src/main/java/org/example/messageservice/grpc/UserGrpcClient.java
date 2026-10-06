@@ -1,16 +1,20 @@
 package org.example.messageservice.grpc;
 
 import io.grpc.Metadata;
-import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import io.grpc.stub.MetadataUtils;
 import lombok.extern.slf4j.Slf4j;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.grpc.client.GrpcChannelFactory;
 import org.springframework.stereotype.Component;
 
-import java.util.Optional;
+import java.util.Collections;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Component
@@ -22,6 +26,7 @@ public class UserGrpcClient {
     private final UserGrpcServiceGrpc.UserGrpcServiceBlockingStub stub;
     private final OAuth2TokenProvider tokenProvider;
 
+    @Autowired
     public UserGrpcClient(GrpcChannelFactory channelFactory, OAuth2TokenProvider tokenProvider) {
         this.stub = UserGrpcServiceGrpc.newBlockingStub(
                 channelFactory.createChannel("userService")
@@ -29,9 +34,17 @@ public class UserGrpcClient {
         this.tokenProvider = tokenProvider;
     }
 
-    public Optional<UserResponse> getUserByUsername(String username) {
+    UserGrpcClient(UserGrpcServiceGrpc.UserGrpcServiceBlockingStub stub, OAuth2TokenProvider tokenProvider) {
+        this.stub = stub;
+        this.tokenProvider = tokenProvider;
+    }
+
+    public Map<String, UserResponse> getUsersByUsernames(Set<String> usernames) {
+        if (usernames.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
         try {
-            // Hämta JWT och lägg till i request-metadata
             String token = tokenProvider.getAccessToken();
             Metadata headers = new Metadata();
             headers.put(AUTHORIZATION_KEY, "Bearer " + token);
@@ -39,20 +52,23 @@ public class UserGrpcClient {
             var stubWithAuth = stub.withInterceptors(
                     MetadataUtils.newAttachHeadersInterceptor(headers)
             );
-            GetUserByUsernameRequest request = GetUserByUsernameRequest.newBuilder()
-                    .setUsername(username)
+            GetUsersByUsernamesRequest request = GetUsersByUsernamesRequest.newBuilder()
+                    .addAllUsernames(usernames)
                     .build();
-            UserResponse response = stubWithAuth
+            UsersResponse response = stubWithAuth
                     .withDeadlineAfter(2, TimeUnit.SECONDS)
-                    .getUserByUsername(request);
-            log.info("gRPC getUserByUsername({}) → {}", username, response.getUsername());
-            return Optional.of(response);
+                    .getUsersByUsernames(request);
+
+            Map<String, UserResponse> resolved = response.getUsersList().stream()
+                    .collect(Collectors.toMap(UserResponse::getUsername, Function.identity(), (a, b) -> a));
+            log.info("gRPC getUsersByUsernames({} requested) → {} resolved", usernames.size(), resolved.size());
+            return resolved;
         } catch (StatusRuntimeException e) {
-            if (e.getStatus().getCode() == Status.Code.NOT_FOUND) {
-                return Optional.empty();
-            }
-            log.error("gRPC getUserByUsername({}) failed: {}", username, e.getStatus(), e);
-            return Optional.empty(); // Fallback till lagrat username
+            log.error("gRPC getUsersByUsernames({}) failed: {}", usernames, e.getStatus(), e);
+            return Collections.emptyMap();
+        } catch (RuntimeException e) {
+            log.error("Username batch resolution failed before the gRPC call: {}", usernames, e);
+            return Collections.emptyMap();
         }
     }
 }
